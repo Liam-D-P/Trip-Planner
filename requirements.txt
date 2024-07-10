@@ -9,3 +9,4 @@ geopy
 ortools
 python-dotenv
 streamlit-folium
+openpyxl
