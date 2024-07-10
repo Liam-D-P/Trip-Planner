@@ -1,0 +1,11 @@
+streamlit
+pandas
+folium
+requests
+networkx
+matplotlib
+googlemaps
+geopy
+ortools
+python-dotenv
+streamlit-folium
