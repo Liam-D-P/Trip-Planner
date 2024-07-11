@@ -6,7 +6,6 @@ import googlemaps
 import streamlit as st
 from streamlit_folium import folium_static
 import webbrowser
-import pycountry
 from dotenv import load_dotenv
 from ortools.constraint_solver import routing_enums_pb2
 from ortools.constraint_solver import pywrapcp
@@ -177,14 +176,7 @@ def main():
     st.title(':blue[Trip Planner] :airplane:')
     st.subheader("Plan your trip with ease! Just add a list of places you want to visit and the application will generate the optimal route for you.", divider='rainbow')
     st.markdown("This maximum amount of locations you can enter is 10.")
-    # Get list of countries using pycountry
-    countries = [country.name for country in pycountry.countries]
-
-    # Sort the countries alphabetically
-    countries.sort()
-
-    # Select country
-    country = st.selectbox("Select a country", countries)
+    country = st.selectbox("Select a country", ["United Kingdom", "United States"])
     region = st.text_input("Enter a region or state within the selected country")
     city = st.text_input("Enter a city")
 
