@@ -2,21 +2,24 @@ import os
 import pandas as pd
 import folium
 import requests
-import networkx as nx
-import matplotlib.pyplot as plt
-import webbrowser
 import googlemaps
 import streamlit as st
 from streamlit_folium import folium_static
-from folium import plugins as folium_plugins
+import webbrowser
 from dotenv import load_dotenv
-from geopy.distance import geodesic
 from ortools.constraint_solver import routing_enums_pb2
 from ortools.constraint_solver import pywrapcp
+from urllib.parse import quote
 
 load_dotenv()
-
 API_KEY = os.getenv('GOOGLE_MAPS_API_KEY')
+
+secrets_path = os.path.join(os.path.expanduser('~'), '.streamlit', 'secrets.toml')
+os.makedirs(os.path.dirname(secrets_path), exist_ok=True)
+with open(secrets_path, 'w') as f:
+    f.write(f'GOOGLE_MAPS_API_KEY = "{API_KEY}"')
+
+API_KEY = st.secrets["GOOGLE_MAPS_API_KEY"]
 gmaps = googlemaps.Client(key=API_KEY)
 
 @st.cache_data
@@ -26,9 +29,9 @@ def get_geocode(api_key, location):
     return requests.get(url, params=params).json()
 
 @st.cache_data
-def process_locations(file, api_key):
+def process_locations(file, api_key, country, region):
     df = pd.read_excel(file)
-    df['Address'] = df['Destination'].apply(lambda x: get_geocode(api_key, x + ", New York, NY")['results'][0]['formatted_address'] if get_geocode(api_key, x + ", New York, NY")['status'] == 'OK' else None)
+    df['Address'] = df['Destination'].apply(lambda x: get_geocode(api_key, f"{x}, {region}, {country}")['results'][0]['formatted_address'] if get_geocode(api_key, f"{x}, {region}, {country}")['status'] == 'OK' else None)
     return df
 
 @st.cache_data
@@ -143,63 +146,130 @@ def generate_map(optimal_route, locations, coordinates_dict, address_dict, mode=
 
     return m
 
-def create_distance_graph(df, locations):
-    G = nx.Graph()
-    for i, origin in enumerate(locations):
-        G.add_node(origin)
-        for j, destination in enumerate(locations):
-            if i != j:
-                G.add_edge(origin, destination, weight=df.iloc[i, j])
+def generate_google_maps_url(locations, optimal_route, transport_mode):
+    base_url = "https://www.google.com/maps/dir/?api=1"
+    
+    # Use the optimal route to order the locations
+    ordered_locations = [locations[i] for i in optimal_route]
+    
+    # Set origin, destination, and waypoints
+    origin = quote(ordered_locations[0])
+    destination = quote(ordered_locations[-1])
+    waypoints = "|".join(quote(loc) for loc in ordered_locations[1:-1])
+    
+    # Construct the URL
+    url = f"{base_url}&origin={origin}&destination={destination}&waypoints={waypoints}&travelmode={transport_mode}"
+    
+    return url
 
-    plt.figure(figsize=(12, 8))
-    pos = nx.spring_layout(G)
-    nx.draw(G, pos, with_labels=True, node_size=700, node_color='skyblue', font_size=8, font_weight='bold')
-    labels = nx.get_edge_attributes(G, 'weight')
-    nx.draw_networkx_edge_labels(G, pos, edge_labels=labels)
-    plt.title("Distance Graph of Destinations")
-    plt.axis('off')
-    plt.tight_layout()
-    return plt.gcf()
+
+def get_transport_mode_value(mode):
+    mode_map = {
+        "driving": "0",
+        "walking": "2",
+        "bicycling": "1",
+        "transit": "3"
+    }
+    return mode_map.get(mode, "0") 
 
 def main():
-    st.title("NY Trip Planner")
+    st.title(':blue[Trip Planner] :airplane:')
+    st.subheader("Plan your trip with ease! Just add a list of places you want to visit and the application will generate the optimal route for you.", divider='rainbow')
+    st.markdown("This maximum amount of locations you can enter is 10.")
+    country = st.selectbox("Select a country", ["United States", "Canada", "United Kingdom"])
+    region = st.text_input("Enter a region or state within the selected country")
+    city = st.text_input("Enter a city")
 
-    uploaded_file = st.file_uploader("Choose a file", type="xlsx")
-    if uploaded_file is not None:
-        df = process_locations(uploaded_file, API_KEY)
-        st.success("File processed successfully!")
+    if 'locations' not in st.session_state:
+        st.session_state.locations = []
 
-        locations = df['Destination'].tolist()
-        addresses = df['Address'].tolist()
-        address_dict = dict(zip(locations, addresses))
+    locations = []
+    for i in range(10):
+        location = st.text_input(f"Enter location {i+1}", key=f"location_{i}")
+        if location:
+            locations.append(location)
 
-        distance_matrix = fetch_and_save_distance_matrix(API_KEY, addresses)
-        
-        coordinates_dict = {}
-        for loc, addr in address_dict.items():
-            result = gmaps.geocode(addr)
-            if result:
-                location = result[0]['geometry']['location']
-                coordinates_dict[loc] = (location['lat'], location['lng'])
+    if 'map_generated' not in st.session_state:
+        st.session_state.map_generated = False
+
+    if locations != st.session_state.locations:
+        st.session_state.locations = locations
+        st.session_state.map_generated = False
+
+    generate_map_button = st.button("Generate Map")
+
+    if generate_map_button or st.session_state.map_generated:
+        if locations:
+            transport_mode = st.selectbox("Select transport mode", ["driving", "walking", "bicycling", "transit"])
+
+            if not st.session_state.map_generated or 'transport_mode' not in st.session_state or st.session_state.transport_mode != transport_mode:
+                st.session_state.transport_mode = transport_mode
+
+                addresses = [f"{loc}, {city}, {region}, {country}" for loc in locations]
+                address_dict = dict(zip(locations, addresses))
+
+                distance_matrix = fetch_and_save_distance_matrix(API_KEY, addresses)
+                
+                coordinates_dict = {}
+                for loc, addr in address_dict.items():
+                    result = gmaps.geocode(addr)
+                    if result:
+                        location = result[0]['geometry']['location']
+                        coordinates_dict[loc] = (location['lat'], location['lng'])
+                    else:
+                        coordinates_dict[loc] = (None, None)
+
+                data = create_data_model(distance_matrix, address_dict)
+                optimal_route = solve_tsp(data)
+
+                if optimal_route:
+                    st.success("Map generated successfully!")
+                    m = generate_map(optimal_route, locations, coordinates_dict, address_dict, mode=transport_mode)
+                    st.session_state.map = m
+                    st.session_state.map_generated = True
+                    st.session_state.optimal_route = optimal_route  # Store optimal_route in session state
+                    folium_static(m)
+                else:
+                    st.error("Failed to generate optimal route. Please check your input locations and try again.")
             else:
-                coordinates_dict[loc] = (None, None)
+                # If the map was already generated and transport mode hasn't changed, just display the existing map
+                folium_static(st.session_state.map)
 
-        data = create_data_model(distance_matrix, address_dict)
-        optimal_route = solve_tsp(data)
+            # Move this outside of the if-else block
+            if st.session_state.get('map_generated', False):
+                if 'show_maps_info' not in st.session_state:
+                    st.session_state.show_maps_info = False
 
-        transport_mode = st.selectbox("Select transport mode", ["driving", "walking", "bicycling", "transit"])
+                if st.button("Export to Google Maps"):
+                    st.session_state.show_maps_info = True
 
-        if st.button("Generate Map"):
-            if optimal_route:
-                m = generate_map(optimal_route, locations, coordinates_dict, address_dict, mode=transport_mode)
-                folium_static(m)
-                st.success("Map generated successfully!")
-            else:
-                st.error("Failed to generate optimal route.")
+                if st.session_state.show_maps_info:
+                    if 'optimal_route' in st.session_state and st.session_state.locations:
+                        google_maps_url = generate_google_maps_url(st.session_state.locations, st.session_state.optimal_route, st.session_state.transport_mode)
+                        st.markdown(f"[Open in Google Maps]({google_maps_url})")
+                
+                        st.info("""
+                        After opening your route in Google Maps, you can use these features:
 
-        if st.button("Show Distance Graph"):
-            fig = create_distance_graph(pd.DataFrame(distance_matrix, index=locations, columns=locations), locations)
-            st.pyplot(fig)
+                        1. Send to Phone: 
+                        - On desktop, look for the "Send to your phone" button in the left sidebar.
+                        - You'll receive a notification on your phone with the route.
+
+                        2. Save the Route (on mobile):
+                        - Open the route on your Google Maps mobile app.
+                        - Tap the "Save" button at the bottom of the screen.
+                        - Choose a list to save to or create a new one.
+
+                        3. Share the Route:
+                        - Tap the "Share" button in Google Maps.
+                        - Choose how you want to share (e.g., via message, email, etc.)
+
+                        These features allow you to easily access your planned route on your mobile device and save it for future reference.
+                        """)
+                    else:
+                        st.error("Please generate a route first.")
+        else:
+            st.error("Please enter at least one location.")
 
 if __name__ == "__main__":
     main()
