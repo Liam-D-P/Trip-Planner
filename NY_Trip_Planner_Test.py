@@ -176,7 +176,7 @@ def main():
     st.title(':blue[Trip Planner] :airplane:')
     st.subheader("Plan your trip with ease! Just add a list of places you want to visit and the application will generate the optimal route for you.", divider='rainbow')
     st.markdown("This maximum amount of locations you can enter is 10.")
-    country = st.selectbox("Select a country", ["United States", "Canada", "United Kingdom"])
+    country = st.selectbox("Select a country", ["United Kingdom", "United States"])
     region = st.text_input("Enter a region or state within the selected country")
     city = st.text_input("Enter a city")
 
