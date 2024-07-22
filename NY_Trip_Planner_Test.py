@@ -3,7 +3,6 @@ import folium
 import requests
 import googlemaps
 import streamlit as st
-import networkx as nx
 import matplotlib.pyplot as plt
 from streamlit_folium import folium_static
 import pycountry
