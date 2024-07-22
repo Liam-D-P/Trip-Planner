@@ -7,3 +7,4 @@ streamlit-folium
 python-dotenv
 ortools
 pycountry
+networx
