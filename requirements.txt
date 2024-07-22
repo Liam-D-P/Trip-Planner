@@ -3,8 +3,9 @@ folium
 requests
 googlemaps
 streamlit
-streamlit-folium
+networkx
+matplotlib
+streamlit_folium
+pycountry
 python-dotenv
 ortools
-pycountry
-networkx
