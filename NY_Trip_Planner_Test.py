@@ -4,8 +4,9 @@ import folium
 import requests
 import googlemaps
 import streamlit as st
+import networkx as nx
+import matplotlib.pyplot as plt
 from streamlit_folium import folium_static
-import webbrowser
 import pycountry
 from dotenv import load_dotenv
 from ortools.constraint_solver import routing_enums_pb2
@@ -173,36 +174,62 @@ def get_transport_mode_value(mode):
     }
     return mode_map.get(mode, "0") 
 
+def create_distance_graph(distance_matrix, locations):
+    G = nx.Graph()
+    for i, origin in enumerate(locations):
+        G.add_node(origin)
+        for j, destination in enumerate(locations):
+            if i != j:
+                G.add_edge(origin, destination, weight=distance_matrix[i][j])
+
+    plt.figure(figsize=(12, 8))
+    pos = nx.spring_layout(G)
+    nx.draw(G, pos, with_labels=True, node_size=700, node_color='skyblue', font_size=8, font_weight='bold')
+    labels = nx.get_edge_attributes(G, 'weight')
+    nx.draw_networkx_edge_labels(G, pos, edge_labels=labels)
+    plt.title("Distance Graph of Destinations")
+    plt.axis('off')
+    plt.tight_layout()
+    return plt.gcf()
+
 def main():
     st.title(':blue[Trip Planner] :airplane:')
     st.subheader("Plan your trip with ease! Just add a list of places you want to visit and the application will generate the optimal route for you.", divider='rainbow')
     st.markdown("This maximum amount of locations you can enter is 10.")
+
+    # Initialize session state variables
+    if 'locations' not in st.session_state:
+        st.session_state.locations = []
+    if 'map_generated' not in st.session_state:
+        st.session_state.map_generated = False
+    if 'distance_matrix' not in st.session_state:
+        st.session_state.distance_matrix = None
+    if 'optimal_route' not in st.session_state:
+        st.session_state.optimal_route = None
+    if 'show_maps_info' not in st.session_state:
+        st.session_state.show_maps_info = False
+
     # Get list of countries using pycountry
-    countries = [country.name for country in pycountry.countries]
+    countries = sorted([country.name for country in pycountry.countries])
 
-    # Sort the countries alphabetically
-    countries.sort()
-
-    # Select country
+    # Select country, region, and city
     country = st.selectbox("Select a country", countries)
     region = st.text_input("Enter a region or state within the selected country")
     city = st.text_input("Enter a city")
 
-    if 'locations' not in st.session_state:
-        st.session_state.locations = []
-
+    # Input locations
     locations = []
     for i in range(10):
         location = st.text_input(f"Enter location {i+1}", key=f"location_{i}")
         if location:
             locations.append(location)
 
-    if 'map_generated' not in st.session_state:
-        st.session_state.map_generated = False
-
+    # Reset relevant session state if locations change
     if locations != st.session_state.locations:
         st.session_state.locations = locations
         st.session_state.map_generated = False
+        st.session_state.distance_matrix = None
+        st.session_state.optimal_route = None
 
     generate_map_button = st.button("Generate Map")
 
@@ -216,7 +243,7 @@ def main():
                 addresses = [f"{loc}, {city}, {region}, {country}" for loc in locations]
                 address_dict = dict(zip(locations, addresses))
 
-                distance_matrix = fetch_and_save_distance_matrix(API_KEY, addresses)
+                st.session_state.distance_matrix = fetch_and_save_distance_matrix(API_KEY, addresses)
                 
                 coordinates_dict = {}
                 for loc, addr in address_dict.items():
@@ -227,55 +254,58 @@ def main():
                     else:
                         coordinates_dict[loc] = (None, None)
 
-                data = create_data_model(distance_matrix, address_dict)
-                optimal_route = solve_tsp(data)
+                data = create_data_model(st.session_state.distance_matrix, address_dict)
+                st.session_state.optimal_route = solve_tsp(data)
 
-                if optimal_route:
+                if st.session_state.optimal_route:
                     st.success("Map generated successfully!")
-                    m = generate_map(optimal_route, locations, coordinates_dict, address_dict, mode=transport_mode)
+                    m = generate_map(st.session_state.optimal_route, locations, coordinates_dict, address_dict, mode=transport_mode)
                     st.session_state.map = m
                     st.session_state.map_generated = True
-                    st.session_state.optimal_route = optimal_route  # Store optimal_route in session state
                     folium_static(m)
                 else:
                     st.error("Failed to generate optimal route. Please check your input locations and try again.")
             else:
-                # If the map was already generated and transport mode hasn't changed, just display the existing map
                 folium_static(st.session_state.map)
 
-            # Move this outside of the if-else block
-            if st.session_state.get('map_generated', False):
-                if 'show_maps_info' not in st.session_state:
-                    st.session_state.show_maps_info = False
+            # Show Distance Graph button
+            if st.button("Show Distance Graph"):
+                if st.session_state.distance_matrix and st.session_state.locations:
+                    fig = create_distance_graph(st.session_state.distance_matrix, st.session_state.locations)
+                    st.subheader("Distance Graph")
+                    st.pyplot(fig)
+                else:
+                    st.error("Please generate a route first.")
 
-                if st.button("Export to Google Maps"):
-                    st.session_state.show_maps_info = True
+            # Export to Google Maps button
+            if st.button("Export to Google Maps"):
+                st.session_state.show_maps_info = True
 
-                if st.session_state.show_maps_info:
-                    if 'optimal_route' in st.session_state and st.session_state.locations:
-                        google_maps_url = generate_google_maps_url(st.session_state.locations, st.session_state.optimal_route, st.session_state.transport_mode)
-                        st.markdown(f"[Open in Google Maps]({google_maps_url})")
-                
-                        st.info("""
-                        After opening your route in Google Maps, you can use these features:
+            if st.session_state.show_maps_info:
+                if st.session_state.optimal_route and st.session_state.locations:
+                    google_maps_url = generate_google_maps_url(st.session_state.locations, st.session_state.optimal_route, st.session_state.transport_mode)
+                    st.markdown(f"[Open in Google Maps]({google_maps_url})")
+            
+                    st.info("""
+                    After opening your route in Google Maps, you can use these features:
 
-                        1. Send to Phone: 
-                        - On desktop, look for the "Send to your phone" button in the left sidebar.
-                        - You'll receive a notification on your phone with the route.
+                    1. Send to Phone: 
+                    - On desktop, look for the "Send to your phone" button in the left sidebar.
+                    - You'll receive a notification on your phone with the route.
 
-                        2. Save the Route (on mobile):
-                        - Open the route on your Google Maps mobile app.
-                        - Tap the "Save" button at the bottom of the screen.
-                        - Choose a list to save to or create a new one.
+                    2. Save the Route (on mobile):
+                    - Open the route on your Google Maps mobile app.
+                    - Tap the "Save" button at the bottom of the screen.
+                    - Choose a list to save to or create a new one.
 
-                        3. Share the Route:
-                        - Tap the "Share" button in Google Maps.
-                        - Choose how you want to share (e.g., via message, email, etc.)
+                    3. Share the Route:
+                    - Tap the "Share" button in Google Maps.
+                    - Choose how you want to share (e.g., via message, email, etc.)
 
-                        These features allow you to easily access your planned route on your mobile device and save it for future reference.
-                        """)
-                    else:
-                        st.error("Please generate a route first.")
+                    These features allow you to easily access your planned route on your mobile device and save it for future reference.
+                    """)
+                else:
+                    st.error("Please generate a route first.")
         else:
             st.error("Please enter at least one location.")
 
